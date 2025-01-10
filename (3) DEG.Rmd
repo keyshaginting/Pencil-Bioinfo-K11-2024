@@ -1,0 +1,462 @@
+---
+title: "DEG"
+output: html_document
+date: "2025-01-02"
+---
+
+
+```{r}
+RNAMatrix<-as.matrix(RnaSeq_clean)
+RNAMatrix
+```
+```{r}
+# Membuat kolom 'kelas' berdasarkan kondisi pada 'sample_type.samples'
+Clinical_all_unique$kelas <- ifelse(Clinical_all_unique$sample_type.samples == "Solid Tissue Normal", "Normal", "T1")
+
+# Memeriksa hasil
+Clinical_all_unique
+
+```
+
+
+```{r}
+rownames(Clinical_all_unique) <- Clinical_all_unique$sample
+Clinical_all_unique
+```
+
+```{r}
+Clinical_all_unique2<-Clinical_all_unique
+RNAMatrix2 <- RNAMatrix
+```
+
+```{r}
+# Menghapus tanda strip (-) pada colnames
+colnames(RNAMatrix) <- gsub("-", "", colnames(RNAMatrix))
+
+# Memeriksa hasil
+head(colnames(RNAMatrix))
+```
+```{r}
+# Menghapus tanda strip (-) pada colnames
+rownames(Clinical_all_unique) <- gsub("-", "", rownames(Clinical_all_unique))
+
+# Memeriksa hasil
+head(rownames(Clinical_all_unique))
+
+```
+
+```{r}
+# Reorder columns of df1 based on the row names of df2
+RNAMatrix <- RNAMatrix[, rownames(Clinical_all_unique)]
+
+# Check if the data frames are identical
+identical(rownames(Clinical_all_unique), colnames(RNAMatrix))
+
+
+```
+```{r}
+RNAMatrix_rounded <- round(RNAMatrix)
+
+```
+
+```{r}
+library("DESeq2")
+dds <- DESeqDataSetFromMatrix(countData = RNAMatrix_rounded,
+                              colData = Clinical_all_unique,
+                              design = ~ kelas)
+dds
+```
+
+
+```{r}
+# Normalisasi data
+dds <- DESeq(dds)
+dds
+
+```
+
+```{r}
+# Memeriksa hasil normalisasi
+normalized_counts <- counts(dds, normalized = TRUE)
+head(normalized_counts)
+```
+
+
+```{r}
+# Hasil analisis DEG
+res <- results(dds)
+
+# Memeriksa hasil analisis
+head(res)
+
+```
+```{r}
+res2<- res
+```
+
+
+```{r}
+library(biomaRt)
+
+# Set up the connection to the Ensembl database using biomaRt
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")  # Example for human dataset
+
+# Get the gene names corresponding to Ensembl IDs
+gene_names <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"), 
+                    filters = "ensembl_gene_id", 
+                    values = rownames(res), 
+                    mart = ensembl)
+
+# Merge gene names with Ensembl IDs to match the rownames of res
+gene_names_merged <- merge(data.frame(ensembl_gene_id = rownames(res)),
+                           gene_names,
+                           by = "ensembl_gene_id",
+                           all.x = TRUE)
+
+# Drop rows where external_gene_name is NA
+gene_names_merged <- gene_names_merged[!is.na(gene_names_merged$external_gene_name), ]
+
+# Check if there are any NAs left
+any(is.na(gene_names_merged$external_gene_name))  # Should return FALSE now
+
+# Drop rows if rownames(res) are not contained in gene_names_merged$ensembl_gene_id
+res <- res[rownames(res) %in% gene_names_merged$ensembl_gene_id, ]
+dim(res)
+dim(gene_names_merged)
+
+# Replace rownames of res with corresponding gene names
+rownames(res) <- gene_names_merged$external_gene_name[match(rownames(res), gene_names_merged$ensembl_gene_id)]
+
+# Check the result
+head(rownames(res))
+
+```
+
+```{r}
+
+library(plotly)
+
+# Function to create Volcano Plot with top 20 gene labels positioned below the dots
+create_volcano_plot <- function(res, threshold_log10pval = 1.3, threshold_logfc = 1) {
+  
+  # Ensure rownames are stored as a column named `gene`
+  res <- as.data.frame(res)
+  res$gene <- rownames(res)
+  
+  # Assign colors based on thresholds
+  color_condition <- ifelse(
+    res$log2FoldChange > threshold_logfc & -log10(res$padj) > threshold_log10pval, "red",  # Red for upregulated
+    ifelse(res$log2FoldChange < -threshold_logfc & -log10(res$padj) > threshold_log10pval, "blue",  # Blue for downregulated
+           "grey"  # Grey for non-significant
+    )
+  )
+  
+  # Count upregulated (red) and downregulated (blue) genes
+  countRed <- sum(color_condition == "red")
+  countBlue <- sum(color_condition == "blue")
+  
+  # Select top 20 genes based on smallest p-values
+  top_genes <- res[order(res$padj, decreasing = FALSE), ][1:20, ]
+  
+  # Create volcano plot
+  volcano_plot <- plot_ly(data = res, 
+                          x = ~log2FoldChange, 
+                          y = ~-log10(padj), 
+                          type = 'scatter', 
+                          mode = 'markers',
+                          marker = list(color = color_condition, 
+                                        size = 5, 
+                                        opacity = 0.7),
+                          text = ~gene,  # Add gene name for hover
+                          hoverinfo = 'text') %>%
+    # Add text for top 20 genes with labels positioned below the dots
+    add_text(data = top_genes, 
+             x = ~log2FoldChange, 
+             y = ~-log10(padj) - 0.2,  # Slightly below the point
+             text = ~gene, 
+             textposition = "top center",  # Position the text
+             textfont = list(color = 'black', size = 10),
+             showlegend = FALSE) %>%
+    # Layout for titles and axis
+    layout(title = "Volcano Plot with Top 20 Genes (Labels Below Dots)", 
+           xaxis = list(title = "Log2 Fold Change"), 
+           yaxis = list(title = "-Log10 p-value"),
+           showlegend = TRUE,
+           legend = list(
+             title = list(text = 'Gene Regulation'),
+             font = list(size = 12)
+           ),
+           annotations = list(
+             list(
+               x = 1.05, y = 1, xref = "paper", yref = "paper",
+               text = paste("Upregulated (n =", countRed, ")"),
+               showarrow = FALSE,
+               font = list(size = 12, color = 'red')
+             ),
+             list(
+               x = 1.05, y = 0.95, xref = "paper", yref = "paper",
+               text = paste("Downregulated (n =", countBlue, ")"),
+               showarrow = FALSE,
+               font = list(size = 12, color = 'blue')
+             )
+           )
+    )
+  
+  # Return the volcano plot
+  return(volcano_plot)
+}
+
+# Example of using the function:
+# volcano_plot <- create_volcano_plot(res, threshold_log10pval = 25, threshold_logfc = 0)
+# volcano_plot
+
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r}
+
+# Menjalankan fungsi dengan contoh threshold
+volcano_plot <- create_volcano_plot(res, threshold_log10pval = 25, threshold_logfc = 0)
+volcano_plot
+```
+
+
+
+```{r}
+res2<- res
+res
+```
+
+```{r}
+# Menambahkan kolom baru dengan nilai -log10 dari padj
+res$neg_log10_padj <- -log10(res$padj)
+
+# Periksa hasilnya
+head(res)
+
+```
+```{r}
+
+# Filter rows where padj > 25
+filtered_res <- res[res$neg_log10_padj > 25, ]
+
+# Check the result
+filtered_res
+
+```
+
+
+```{r}
+# Extract raw counts matrix
+raw_counts <- counts(dds, normalized = FALSE)
+
+# Extract normalized counts matrix
+normalized_counts <- counts(dds, normalized = TRUE)
+
+# View the first few rows of the matrix
+head(raw_counts)
+head(normalized_counts)
+```
+
+
+```{r}
+# Step 1: Ensure rownames(normalized_counts) matches gene_names_merged$ensembl_gene_id
+filtered_counts <- normalized_counts[rownames(normalized_counts) %in% gene_names_merged$ensembl_gene_id, ]
+
+# Step 2: Create a mapping between ensembl_gene_id and external_gene_name
+gene_name_map <- setNames(gene_names_merged$external_gene_name, gene_names_merged$ensembl_gene_id)
+
+# Step 3: Replace rownames of filtered_counts with the corresponding external_gene_name
+rownames(filtered_counts) <- gene_name_map[rownames(filtered_counts)]
+
+# Step 4: Remove rows with NA rownames (if some ensembl_gene_id didn't have a corresponding external_gene_name)
+filtered_counts <- filtered_counts[!is.na(rownames(filtered_counts)), ]
+
+# View the result
+head(filtered_counts)
+
+
+```
+
+
+```{r}
+dim(filtered_res)
+dim(filtered_counts)
+```
+
+
+```{r}
+# Filter rows in filtered_counts where rownames match rownames in filtered_res
+filtered_counts <- filtered_counts[rownames(filtered_counts) %in% rownames(filtered_res), ]
+
+
+dim(filtered_counts)
+dim(filtered_res)
+```
+
+
+```{r}
+# Remove duplicate rownames by keeping the first occurrence
+filtered_res <- filtered_res[!duplicated(rownames(filtered_res)), ]
+filtered_counts <- filtered_counts[!duplicated(rownames(filtered_counts)), ]
+
+# View the result
+
+dim(filtered_counts)
+dim(filtered_res)
+
+```
+
+```{r}
+filtered_counts
+```
+
+
+```{r}
+RNA_sig_df <- as.data.frame(filtered_counts)
+RNA_sig_df
+```
+
+```{r}
+library(plotly)
+library(ggplot2) # For scale_color_manual if needed
+
+# Step 1: Transpose the data frame so rows are patients and columns are genes
+transposed_data <- t(RNA_sig_df)
+
+# Step 2: Standardze the data (using scale)
+scaled_data <- scale(transposed_data)
+# Step 3: Perform PCA
+pca_result <- prcomp(scaled_data, center = TRUE, scale. = TRUE)
+
+
+
+```
+
+
+```{r}
+# Step 4: Extract PCA components for visualization
+pca_data <- as.data.frame(pca_result$x)  # Extract principal components
+pca_data$kelas <- Clinical_all_unique$kelas         # Add 'kelas' column for coloring
+
+# Step 5: Visualize PCA with plotly
+pca_plot <- plot_ly(
+  data = pca_data,
+  x = ~PC1, 
+  y = ~PC2, 
+  type = 'scatter', 
+  mode = 'markers',
+  color = ~kelas,        # Color points based on clinical$kelas
+  colors = c("red", "blue"), # Customize colors if necessary
+  text = rownames(pca_data), # Add hover text (e.g., patient IDs)
+  marker = list(size = 10, opacity = 0.7)
+) %>%
+  layout(
+    title = "PCA Plot of Gene Expression Data",
+    xaxis = list(title = "Principal Component 1"),
+    yaxis = list(title = "Principal Component 2"),
+    showlegend = TRUE
+  )
+
+# Display the plot
+pca_plot
+```
+
+```{r}
+# Step 1: Get the proportion of variance explained by each principal component
+explained_variance <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+
+# Step 2: Calculate the percentage of variance explained
+PC1_percent <- round(explained_variance[1] * 100, 2)
+PC2_percent <- round(explained_variance[2] * 100, 2)
+
+# Step 3: Create the PCA plot with updated axis labels
+pca_plot <- plot_ly(
+  data = pca_data,
+  x = ~PC1, 
+  y = ~PC2, 
+  type = 'scatter', 
+  mode = 'markers',
+  color = ~kelas,        # Color points based on clinical$kelas
+  colors = c("blue", "red"), # Customize colors if necessary
+  text = rownames(pca_data), # Add hover text (e.g., patient IDs)
+  marker = list(size = 10, opacity = 0.7)
+) %>%
+  layout(
+    title = "PCA Plot of Gene Expression Data",
+    xaxis = list(
+      title = paste("PC1 (", PC1_percent, "%)", sep = "")
+    ),
+    yaxis = list(
+      title = paste("PC2 (", PC2_percent, "%)", sep = "")
+    ),
+    showlegend = TRUE
+  )
+
+# Display the plot
+pca_plot
+
+
+```
+
+```{r}
+RNA_seq_df <- as.data.frame(scaled_data)
+RNA_seq_df
+```
+
+```{r}
+identical(rownames(RNA_seq_df), rownames(Clinical_all_unique))
+```
+
+```{r}
+filtered_counts
+dim(filtered_counts)
+```
+
+```{r}
+RNA_DF <- as.data.frame(filtered_counts)
+RNA_DF
+```
+
+```{r}
+RNA_DF <- as.data.frame(t(RNA_DF))
+RNA_DF
+```
+
+```{r}
+identical(rownames(Clinical_all_unique), rownames(RNA_DF))
+
+```
+
+```{r}
+library(dplyr)
+label <- Clinical_all_unique %>% select(sample, kelas)
+label
+```
+
+```{r}
+# Ekspor ke file TSV
+write.table(RNA_DF, file = "RNA_DF.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(label, file = "label.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+
+```{r}
+save(RNA_DF, label, file = 'RNA_label_set.RData')
+
+```
+
+
+
+
+
+

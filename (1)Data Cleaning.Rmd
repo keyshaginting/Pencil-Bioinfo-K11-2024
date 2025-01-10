@@ -1,0 +1,93 @@
+---
+title: "DEG"
+output: html_document
+date: "2025-01-02"
+---
+
+
+```{r}
+# Contoh data RNA count matrix (bisa diganti dengan data Anda)
+count_matrix <- matrix(c(100, 200, 300, 400, 500, 600, 700, 800),
+                      nrow = 4, ncol = 2,
+                      dimnames = list(c("gene1", "gene2", "gene3", "gene4"),
+                                      c("sample1", "sample2")))
+
+# Memeriksa count_matrix
+count_matrix
+
+```
+
+
+```{r}
+# Contoh metadata dengan kondisi
+col_data <- data.frame(
+  condition = c("control", "treatment"), # Misalnya 'control' dan 'treatment'
+  row.names = colnames(count_matrix)
+)
+
+# Memeriksa col_data
+col_data
+
+```
+```{r}
+library(DESeq2)
+
+# Membuat DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = col_data,
+                              design = ~ condition)
+
+# Memeriksa objek DESeqDataSet
+dds
+
+```
+```{r}
+# Normalisasi data
+dds <- DESeq(dds)
+
+# Memeriksa hasil normalisasi
+normalized_counts <- counts(dds, normalized = TRUE)
+head(normalized_counts)
+
+```
+
+```{r}
+# Membuat DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = RnaSeq_clean,
+                              colData = # Contoh metadata dengan kondisi
+col_data <- data.frame(
+  condition = c("control", "treatment"), # Misalnya 'control' dan 'treatment'
+  row.names = colnames(count_matrix)
+)
+
+# Memeriksa col_data
+col_data
+,
+                              design = ~ condition)
+
+# Memeriksa objek DESeqDataSet
+dds
+
+```
+
+
+```{r}
+library("pasilla")
+pasCts <- system.file("extdata",
+                      "pasilla_gene_counts.tsv",
+                      package="pasilla", mustWork=TRUE)
+pasAnno <- system.file("extdata",
+                       "pasilla_sample_annotation.csv",
+                       package="pasilla", mustWork=TRUE)
+cts <- as.matrix(read.csv(pasCts,sep="\t",row.names="gene_id"))
+coldata <- read.csv(pasAnno, row.names=1)
+coldata <- coldata[,c("condition","type")]
+coldata$condition <- factor(coldata$condition)
+coldata$type <- factor(coldata$type)
+
+```
+
+```{r}
+cts
+```
+
